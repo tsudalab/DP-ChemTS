@@ -109,7 +109,7 @@ def zinc_logp(smile):
 def zinc_data_with_bracket_original():
 
     sen_space=[]
-    f = open('/home/sumita/mpi_benchmark/leaf_parallel_test/data/250k_rndm_zinc_drugs_clean.smi','rb')
+    f = open('/home/yang/DP-ChemTS/leaf_parallel_test/simulation1/16core/data/250k_rndm_zinc_drugs_clean.smi','rb')
     reader = csv.reader(f)
     for row in reader:
         #word_space[row].append(reader[row])

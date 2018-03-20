@@ -89,9 +89,9 @@ class Node:
         #self.nodelock.acquire()
 
         ucb=[]
-        print "current node's virtual_loss:",self.num_thread_visited,self.virtual_loss
+        #print "current node's virtual_loss:",self.num_thread_visited,self.virtual_loss
         for i in range(len(self.childNodes)):
-            print "current node's childrens' virtual_loss:",self.childNodes[i].num_thread_visited,self.childNodes[i].virtual_loss
+            #print "current node's childrens' virtual_loss:",self.childNodes[i].num_thread_visited,self.childNodes[i].virtual_loss
             ucb.append((self.childNodes[i].wins+self.childNodes[i].virtual_loss)/
             (self.childNodes[i].visits+self.childNodes[i].num_thread_visited)+
             1.0*sqrt(2*log(self.visits+self.num_thread_visited)/(self.childNodes[i].visits+self.childNodes[i].num_thread_visited)))
@@ -124,9 +124,10 @@ class Node:
     def delete_virtual_loss(self):
         self.num_thread_visited=0
         self.virtual_loss=0
+    
+    def expanded_node(self, model, state, val):
+        
 
-
-    def expanded_node(self, model,state,val):
         all_nodes=[]
 
         end="\n"
@@ -142,8 +143,53 @@ class Node:
         x=np.reshape(get_int,(1,len(get_int)))
         x_pad= sequence.pad_sequences(x, maxlen=82, dtype='int32',
             padding='post', truncating='pre', value=0.)
+	ex_time=time.time()
 
-        for i in range(60):
+        for i in range(1):
+            global graph
+            with graph.as_default():
+                predictions=model.predict(x_pad)
+                #print "shape of RNN",predictions.shape
+                preds=np.asarray(predictions[0][len(get_int)-1]).astype('float64')
+                preds = np.log(preds) / 1.0
+                preds = np.exp(preds) / np.sum(np.exp(preds))
+                #next_probas = np.random.multinomial(1, preds, 1)
+                next_probas=np.argsort(preds)[-5:]
+		next_probas=list(next_probas)
+		#next_int=np.argmax(next_probas)
+                #get_int.append(next_int)
+                #all_nodes.append(next_int)
+
+        #all_nodes=list(set(all_nodes))
+	if 0 in next_probas:
+	   next_probas.remove(0)
+        all_nodes=next_probas
+	print all_nodes
+
+        self.expanded=all_nodes
+        #print self.expanded
+	exfi_time=time.time()-ex_time
+	print exfi_time
+
+
+    def expanded_node1(self, model,state,val):
+        all_nodes=[]
+
+        end="\n"
+        position=[]
+        position.extend(state)
+        total_generated=[]
+        new_compound=[]
+        get_int_old=[]
+        for j in range(len(position)):
+            get_int_old.append(val.index(position[j]))
+
+        get_int=get_int_old
+        x=np.reshape(get_int,(1,len(get_int)))
+        x_pad= sequence.pad_sequences(x, maxlen=82, dtype='int32',
+            padding='post', truncating='pre', value=0.)
+	ex_time=time.time()
+        for i in range(30):
             global graph
             with graph.as_default():
                 predictions=model.predict(x_pad)
@@ -161,6 +207,8 @@ class Node:
 
         self.expanded=all_nodes
         #print self.expanded
+	exfi_time=time.time()-ex_time
+	print exfi_time
 
     def node_to_add(self, all_nodes,val):
         added_nodes=[]
@@ -169,7 +217,7 @@ class Node:
 
         self.nodeadded=added_nodes
 
-        print "childNodes of current node:", self.nodeadded
+        #print "childNodes of current node:", self.nodeadded
 
     def random_node_to_add(self, all_nodes,val):
         added_nodes=[]
@@ -262,39 +310,16 @@ def make_input_smile(generate_smile):
     return new_compound
 
 
-def simulator(new_compound):
-    score=[]
-    for i in range(len(new_compound)):
-        try:
-            m = Chem.MolFromSmiles(str(new_compound[i]))
-        except:
-            print None
-        if m!=None and len(new_compound[i])<=81:
-            logp=Descriptors.MolLogP(m)
-            t=random.randint(100,300)
-            #time.sleep(t)
-            for i in range(t):
-                i=i+1
-        else:
-            logp=-10
-            #t=random.randint(10,50)
-            t=random.randint(100,300)
-            #time.sleep(t)
-            for i in range(t):
-                i=i+1
-        score.append(logp)
-
-    return score
 
 
-def ChemTS_run(rootnode,lock,chem_model):
+def ChemTS_run(rootnode,result_queue,lock,chem_model):
     """----------------------------------------------------------------------"""
     """----------------------------------------------------------------------"""
     global maxnum
     global gau_file_index
     start_time=time.time()
     #while maxnum<1000:
-    while time.time()-start_time<=7200:
+    while time.time()-start_time<1800:
 
         node = rootnode
         state=['&']
@@ -305,49 +330,79 @@ def ChemTS_run(rootnode,lock,chem_model):
 
         while node.expanded!=[] and node.nodeadded==[] and len(node.childNodes)==len(node.expanded):
             node.num_thread_visited+=1
-            node.virtual_loss+=-1
+            node.virtual_loss+=0
             node = node.Selectnode()
             state.append(node.position)
+	#lock.release()
 
 
-        print "current tree branch:",state
+        #print "current tree branch:",state
         depth.append(len(state))
-
+	lock.release()
 
         """this if condition makes sure the tree not exceed the maximum depth"""
-        if len(state)>=81:
-            re=-1.0
+        if len(state)>81:
+            #re=-2.0
+            lock.acquire()
+            dest_core=random.choice(free_core_id)
+            free_core_id.remove(dest_core)
+            comm.send([state,m], dest=dest_core, tag=START)
+            lock.release()
+            data = comm.recv(source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG, status=status)
+            lock.acquire()
+            free_core_id.append(data[2])
+            lock.release()
+        
+            tag = status.Get_tag()
+            if tag == DONE:
+                lock.acquire()
+                all_compounds.append(data[1])
+                lock.release()
+                #if data[0]!=-1000:
+                #    re=(0.8*data[0])/(1.0+abs(0.8*data[0]))
+                #    lock.acquire()
+                #    wave_compounds.append(data[1])
+                #    wave.append(data[0])
+                #    lock.release()
+                #else:
+                re=-10
+
+
+            lock.acquire()
             while node != None:
                 node.Update(re)
+                node.delete_virtual_loss()
                 node = node.parentNode
+            lock.release()
         else:
             """expansion step"""
+	    lock.acquire()
             if node.expanded==[]:
+	        maxnum+=1
+		#print "how many node should be added"
                 node.expanded_node(chem_model,state,val)
                 node.node_to_add(node.expanded,val)
                 node.random_node_to_add(node.expanded,val)
                 node.num_thread_visited+=1
-                node.virtual_loss+=-1
+                node.virtual_loss+=0
                 #print "node.nodeadded:",node.nodeadded
                 if node.nodeadded!=[]:
                     m=random.choice(node.nodeadded)
                     node=node.Addnode(m)
                     node.num_thread_visited+=1
-                    node.virtual_loss+=-1
+                    node.virtual_loss+=0
 
 
             else:
+	        #print "add node"
                 node.num_thread_visited+=1
-                node.virtual_loss+=-1
+                node.virtual_loss+=0
                 if node.nodeadded!=[]:
                     m=random.choice(node.nodeadded)
                     node=node.Addnode(m)
                     node.num_thread_visited+=1
-                    node.virtual_loss+=-1
-
-
-
-            maxnum+=1
+                    node.virtual_loss+=0
+            #print "m is:",m
             lock.release()
             """simulation step"""
             lock.acquire()
@@ -359,12 +414,7 @@ def ChemTS_run(rootnode,lock,chem_model):
             lock.acquire()
             free_core_id.append(data[2])
             lock.release()
-            print data
-
-            print "free_core_id:",free_core_id
-            #print "mpi core:",MPI.ANY_SOURCE
-            #print "status:",status
-
+        
             tag = status.Get_tag()
             if tag == DONE:
                 lock.acquire()
@@ -376,11 +426,11 @@ def ChemTS_run(rootnode,lock,chem_model):
                     wave_compounds.append(data[1])
                     wave.append(data[0])
                     lock.release()
-                else:
+                if data[0]==-1000:
                     re=-1
-            #for i in range(len(new_compound)):
-                #re=(0.8*score[0][i])/(1.0+abs(0.8*score[0][i]))
-                #print "reward:",re
+		if m=='\n':
+		    re=-4.0
+
             lock.acquire()
             """backpropation step"""
             while node!= None:
@@ -391,22 +441,15 @@ def ChemTS_run(rootnode,lock,chem_model):
             lock.release()
 
 
-
-    print "all_com=",all_compounds
-    print "depth=",depth
-    #print "num_of_com=",len(all_compounds)
-    print "valid_com=",wave_compounds
-    #print "num_of_vcom=",len(wave_compounds)
-    print "score=",wave
-    print len(wave)
-
-
+    result_queue.put([all_compounds,wave_compounds,depth,wave,maxnum])
+  
 
 def gaussion_workers(chem_model,val):
     while True:
         task = comm.recv(source=0, tag=MPI.ANY_TAG, status=status)
         tag = status.Get_tag()
         if tag==START:
+	    si_time=time.time()
             state=task[0]
             m=task[1]
             all_posible=chem_kn_simulation(chem_model,state,val,m)
@@ -418,11 +461,14 @@ def gaussion_workers(chem_model,val):
             try:
                 m = Chem.MolFromSmiles(str(new_compound[0]))
             except:
-                print None
+                m=None
             #if m!=None and len(task[i])<=81:
             if m!=None:
-                logp=Descriptors.MolLogP(m)
-                SA_score = -sascorer.calculateScore(MolFromSmiles(new_compound[0]))
+                try:
+		   logp=Descriptors.MolLogP(m)
+                except:
+		   logp=-1000
+		SA_score = -sascorer.calculateScore(MolFromSmiles(new_compound[0]))
                 cycle_list = nx.cycle_basis(nx.Graph(rdmolops.GetAdjacencyMatrix(MolFromSmiles(new_compound[0]))))
                 if len(cycle_list) == 0:
                     cycle_length = 0
@@ -433,9 +479,6 @@ def gaussion_workers(chem_model,val):
                 else:
                     cycle_length = cycle_length - 6
                 cycle_score = -cycle_length
-                    #print cycle_score
-                    #print SA_score
-                    #print logp
                 SA_score_norm=(SA_score-SA_mean)/SA_std
                 logp_norm=(logp-logP_mean)/logP_std
                 cycle_score_norm=(cycle_score-cycle_mean)/cycle_std
@@ -446,11 +489,14 @@ def gaussion_workers(chem_model,val):
                 score.append(-1000)
             score.append(new_compound[0])
             score.append(rank)
+	    fi_time=time.time()-si_time
+	    print "si_time:",fi_time
 
             comm.send(score, dest=0, tag=DONE)
 
         if tag==EXIT:
-            break
+            #MPI.Abort(MPI.COMM_WORLD)
+	    break
     comm.send(None, dest=0, tag=EXIT)
 
 
@@ -501,10 +547,12 @@ if __name__ == "__main__":
     wave_compounds=[]
     wave=[]
     depth=[]
+    result=[]
+    result_queue=Queue()
     free_core_id=range(1,num_simulations+1)
     if rank==0:
         for thread_id in range(num_simulations):
-            thread_best = Thread(target=ChemTS_run,args=(rootnode,lock,chem_model))
+            thread_best = Thread(target=ChemTS_run,args=(rootnode,result_queue,lock,chem_model))
             thread_pool.append(thread_best)
 
         for i in range(num_simulations):
@@ -512,7 +560,17 @@ if __name__ == "__main__":
 
         for i in range(num_simulations):
             thread_pool[i].join()
-
+        for i in range(num_simulations):
+            result.append(result_queue.get())
+        print result[0][1]
+	print result[0][2]
+	print result[0][3]
+	print len(result[0][0])
+	print len(result[0][1])
+        print max(result[0][3])
+        print len(result[0][3])
+	print result[0][4]
+        comm.Abort() 
         for i in range(num_simulations):
             comm.send(None, dest=i+1, tag=EXIT)
 
